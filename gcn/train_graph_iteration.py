@@ -74,6 +74,7 @@ def train(args):
     logging.info("Use CT + Myelination : {}".format(args.use_thicks_myelins))
     logging.info("Step Size for Reduction Factor (Gamma) for learning rate : {}".format(args.lr_reduce_freq))
     logging.info("Reduction Factor (Gamma) for learning rate : {}".format(args.gamma))
+    logging.info("Using Local Aggregation : {}".format(args.local_agg))
     data = load_data(args, os.path.join(os.environ['DATAPATH'], args.dataset))
     
     train_graph_data_dicts, val_graph_data_dicts, test_graph_data_dicts = \
@@ -184,6 +185,11 @@ def train(args):
     
     logging.info(f"Max Number of Epochs : {args.epochs}")
     for epoch in range(args.epochs): 
+        print("THESE ARE THE ARGS!!!!")
+        print("################################################################")
+        print(args)
+        print("################################################################")
+        logging.info(f"Model arguments: {args}")
         # logging.info(f"Model Curvature: {model.c[0]}")
         model.train()
     
