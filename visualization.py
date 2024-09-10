@@ -4,7 +4,6 @@ import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
 import numpy as np
-from hyperbolic_clustering.utils.utils import poincare_dist
 import torch
 import networkx as nx
 from matplotlib.patches import Circle 
@@ -34,18 +33,6 @@ os.environ['LOG_DIR'] = os.path.join(os.getcwd(), 'logs')
 #             '#800080', '#008080', '#ff8080', '#80ff80', '#8080ff', 
 #             '#ffff80', '#ff80ff', '#80ffff', '#c00000', '#00c000', 
 #             '#0000c0', '#c0c000', '#c000c0']
-
-def get_roi_index_to_rgb_color():
-    hcp_atlas_df = get_hcp_atlas_df()
-    region_indices_to_cortex_ids = {i : hcp_atlas_df['Cortex_ID'][i] for i in range(NUM_ROIS)}
-    cortices, cortex_ids_to_cortices = get_cortices_and_cortex_ids_to_cortices()
-    cortex_ids = cortex_ids_to_cortices.keys()
-    cortex_id_to_roi_indices_list = {cortex_id : [roi_index for roi_index in 
-                                range(NUM_ROIS) if region_indices_to_cortex_ids[roi_index] == cortex_id] 
-                                for cortex_id in cortex_ids}
-    roi_index_to_rgb_color = {roi_index : mcolors.hex2color(COLORS[region_indices_to_cortex_ids[roi_index]]) 
-                              for roi_index in range(NUM_ROIS)}
-    return roi_index_to_rgb_color
 
 def viz_metrics(log_path, use_save=False, prefix= ""):
     def collect_and_plot_curvatures(log_path, use_save, prefix):
@@ -411,7 +398,8 @@ def get_edges(adj_matrix):
                     edges.append([i, j])
         return edges
 
-def plot_embeddings(embeddings, title=None, use_scale=False, square_borders=False, use_centroids=False, use_legend=True):
+
+def plot_embeddings(embeddings, title=None, use_scale=False, use_cluster_metrics=False, use_centroids=False):
     # Create a list of labels for the legend
     cortices, cortex_ids_to_cortices = get_cortices_and_cortex_ids_to_cortices()
 
@@ -434,21 +422,15 @@ def plot_embeddings(embeddings, title=None, use_scale=False, square_borders=Fals
                     c = COLORS[i], 
                     s = 50,
                     marker = "s",
-                    label = CORTEX_TO_ABBREVIATION[cortex_ids_to_cortices[i]])
+                    label = cortex_ids_to_cortices[i])
     # Shrink current axis by 20%
     ax = plt.gca()
-    ax.figure.set_dpi(300)
     box = ax.get_position()
     ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
 
     # Put a legend to the right of the current axis
-    # ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-    if use_legend: 
-        legend = ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=7, fancybox=True, shadow=True, title='Subnetworks', borderaxespad=0.)
-        legend.get_title().set_fontweight('bold')
-        for text in legend.get_texts():
-            text.set_fontweight('bold')
-
+    ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+    
     circ = plt.Circle((0, 0), 
                     radius=1, 
                     edgecolor='black', 
@@ -466,13 +448,8 @@ def plot_embeddings(embeddings, title=None, use_scale=False, square_borders=Fals
     #         _ = plt.plot([x1[0], x2[0]], [x1[1], x2[1]], '--', c='black', linewidth=1, alpha=0.25)
     if title != None:
         plt.title(title, size=16)
-    plt.savefig("fhnn_embedding_for_average_592_plv_FINAL.png", dpi=300)
-    ax.set_xticks([])
-    ax.set_yticks([])
-    if not square_borders:
-        ax.set_axis_off()
-    # plt.axis('off')
-    # plt.axis('equal')
+    plt.savefig("fhnn_embedding_for_average_592_plv.png")
+    
     permuted_colors = [COLORS[i] for i in embeddings_df.label.unique()]
     if use_centroids:
         embeddings_df_left = embeddings_df[embeddings_df.LR == "L"]
@@ -499,109 +476,6 @@ def plot_embeddings(embeddings, title=None, use_scale=False, square_borders=Fals
         #                                 clustering_right=clustering_right,
         #                                 use_diff_plot=True, 
         #                                 permuted_colors=permuted_colors)
-        plot_avg_hyperbolic_radii_left_right(embeddings_df_left_detensored,
-                                        embeddings_df_right_detensored,  
-                                        use_diff_plot=True, 
-                                        permuted_colors=permuted_colors)
-        
-def plot_subnetwork_embeddings(subnet_abbreviation, embeddings, title=None, use_scale=False, square_borders=False, use_centroids=False, use_legend=False):
-    if subnet_abbreviation not in CORTEX_TO_ABBREVIATION.values():
-        raise AssertionError("Invalid subnet_abbreviation : {}".format(subnet_abbreviation))
-    
-    # Create a list of labels for the legend
-    cortices, cortex_ids_to_cortices = get_cortices_and_cortex_ids_to_cortices()
-
-    labels = list(set(cortices))
-    embeddings_df = get_embeddings_df(embeddings) 
-    # Create the legend
-    if use_scale: embeddings_df = scale_embeddings_df_to_poincare_disk(embeddings_df)
-    
-    # Make all embeddings that are not part of the subnetwork very transparent i.e. having a low alpha value
-    for i in embeddings_df.label.unique():
-        if CORTEX_TO_ABBREVIATION[cortex_ids_to_cortices[i]] == subnet_abbreviation:
-            emb_L = embeddings_df.loc[(embeddings_df.LR == "L")]
-            plt.scatter(emb_L.loc[(emb_L.label == i), 'x'], 
-                        emb_L.loc[(emb_L.label == i), 'y'], 
-                        c = COLORS[i],
-                        s = 50, 
-                        marker = "v",)
-                        # label = cortex_ids_to_cortices[i]) avoid repeating same labels but with differnet shape
-            emb_R = embeddings_df.loc[(embeddings_df.LR == "R")]
-            plt.scatter(emb_R.loc[(emb_R.label == i), 'x'], 
-                        emb_R.loc[(emb_R.label == i), 'y'], 
-                        c = COLORS[i], 
-                        s = 50,
-                        marker = "s",
-                        label = CORTEX_TO_ABBREVIATION[cortex_ids_to_cortices[i]])
-        else:
-            emb_L = embeddings_df.loc[(embeddings_df.LR == "L")]
-            plt.scatter(emb_L.loc[(emb_L.label == i), 'x'], 
-                        emb_L.loc[(emb_L.label == i), 'y'], 
-                        c = COLORS[i],
-                        s = 50, 
-                        marker = "v",
-                        alpha = 0.15)
-                        # label = cortex_ids_to_cortices[i]) avoid repeating same labels but with differnet shape
-            emb_R = embeddings_df.loc[(embeddings_df.LR == "R")]
-            plt.scatter(emb_R.loc[(emb_R.label == i), 'x'], 
-                        emb_R.loc[(emb_R.label == i), 'y'], 
-                        c = COLORS[i], 
-                        s = 50,
-                        marker = "s",
-                        alpha = 0.05,
-                        label = CORTEX_TO_ABBREVIATION[cortex_ids_to_cortices[i]])
-            
-        # Plot a dotted circle around the subnetwork embeddings with radius equal to the average radius of all the embeddings in the subnetwork
-        if CORTEX_TO_ABBREVIATION[cortex_ids_to_cortices[i]] == subnet_abbreviation:
-            embeddings_from_id = embeddings_df[embeddings_df.label == i][['x', 'y']].values
-            avg_radius = 0
-            origin = (0, 0)  # Define the origin
-            for embedding_coords in embeddings_from_id:
-                # hyperbolic_radius = poincare_dist(embedding_coords, origin)
-                hyperbolic_radius = np.linalg.norm(embedding_coords)
-                print("HYPER RADIUS", hyperbolic_radius)
-                avg_radius += hyperbolic_radius
-            avg_radius /= len(embeddings_from_id)
-            print("LEN EMBEDDINGS FROM ID", len(embeddings_from_id))
-            print("AVERAGE RADIUS", avg_radius)
-            circ = plt.Circle((0, 0), 
-                        radius=avg_radius, 
-                        edgecolor=COLORS[i], 
-                        facecolor='None', 
-                        linewidth=3, 
-                        alpha=0.75,
-                        linestyle='dotted')
-            ax = plt.gca()
-            ax.add_patch(circ)
-    # Shrink current axis by 20%
-    ax = plt.gca()
-    box = ax.get_position()
-    ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-
-    # Put a legend to the right of the current axis
-    if use_legend:
-        # ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-        ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=3, fancybox=True, shadow=True, title='Subnetworks', borderaxespad=0.)
-    circ = plt.Circle((0, 0), 
-                    radius=1, 
-                    edgecolor='black', 
-                    facecolor='None', 
-                    linewidth=3, 
-                    alpha=0.5)
-    ax.add_patch(circ)
-    
-    if title != None:
-        plt.title(title, size=16)
-    plt.savefig("fhnn_embedding_for_average_592_plv.png")
-    ax.set_xticks([])
-    ax.set_yticks([])
-    if not square_borders: ax.set_axis_off()
-    permuted_colors = [COLORS[i] for i in embeddings_df.label.unique()]
-    if use_centroids:
-        embeddings_df_left = embeddings_df[embeddings_df.LR == "L"]
-        embeddings_df_right = embeddings_df[embeddings_df.LR == "R"]
-        embeddings_df_left_detensored = detensorify_embeddings_df(embeddings_df_left)
-        embeddings_df_right_detensored = detensorify_embeddings_df(embeddings_df_right)
         plot_avg_hyperbolic_radii_left_right(embeddings_df_left_detensored,
                                         embeddings_df_right_detensored,  
                                         use_diff_plot=True, 
@@ -689,7 +563,6 @@ def get_total_cortices_to_avg_hyperbolic_cluster_radii_left_right(embeddings_dir
         embeddings = np.load(os.path.join(embeddings_dir, test_embeddings_dir))
         
         labels = list(set(cortices))
-        # NOTE: get_embeddings_df takes care of projecting Hyperboloid Embeddings into Poincare Embeddings
         embeddings_df = get_embeddings_df(embeddings) 
         if not permuted_colors: permuted_colors = [COLORS[i] for i in embeddings_df.label.unique()]
         # Create the legend
@@ -877,9 +750,7 @@ def plot_total_avg_hyperbolic_radii_left_right(cortices_to_hyperbolic_radii_left
     fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(10, 5))
     NUM_SUBNETS = 22
     num_subnets = len(cortices_to_hyperbolic_radii_right.keys())
-    # axes[0].set_xticks(np.arange(num_subnets), rotation=45)
-    axes[0].set_xticks(np.arange(num_subnets))
-
+    axes[0].set_xticks(np.arange(num_subnets), rotation=45)
     axes[0].set_xticklabels([*map(lambda x : CORTEX_TO_ABBREVIATION[x], cortices_to_hyperbolic_radii_right.keys())], rotation=45)
     axes[0].bar([*map(lambda x : CORTEX_TO_ABBREVIATION[x], cortices_to_hyperbolic_radii_left.keys())], 
             cortices_to_hyperbolic_radii_left.values(), color=permuted_colors)
@@ -926,8 +797,7 @@ def plot_avg_hyperbolic_radii_left_right(embeddings_df_left, embeddings_df_right
     fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(10, 5))
     NUM_SUBNETS = 22
     num_subnets = len(cortices_to_hyperbolic_radii_right.keys())
-    # axes[0].set_xticks(np.arange(num_subnets), rotation=45)
-    axes[0].set_xticks(np.arange(num_subnets))
+    axes[0].set_xticks(np.arange(num_subnets), rotation=45)
     axes[0].set_xticklabels([*map(lambda x : CORTEX_TO_ABBREVIATION[x], cortices_to_hyperbolic_radii_right.keys())], rotation=45)
     axes[0].bar([*map(lambda x : CORTEX_TO_ABBREVIATION[x], cortices_to_hyperbolic_radii_left.keys())], 
             cortices_to_hyperbolic_radii_left.values(), color=permuted_colors)
@@ -976,8 +846,7 @@ def plot_hyperbolic_radii_left_right(embeddings_df_left, embeddings_df_right, cl
     fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(10, 5))
     NUM_SUBNETS = 22
     num_subnets = len(cortices_to_hyperbolic_radii_right.keys())
-    # axes[0].set_xticks(np.arange(num_subnets), rotation=45)
-    axes[0].set_xticks(np.arange(num_subnets))
+    axes[0].set_xticks(np.arange(num_subnets), rotation=45)
     axes[0].set_xticklabels([*map(lambda x : CORTEX_TO_ABBREVIATION[x], cortices_to_hyperbolic_radii_right.keys())], rotation=45)
     axes[0].bar([*map(lambda x : CORTEX_TO_ABBREVIATION[x], cortices_to_hyperbolic_radii_left.keys())], 
             cortices_to_hyperbolic_radii_left.values(), color=permuted_colors)
@@ -1253,8 +1122,6 @@ def viz_subnetwork_radii_across_age(date, precalculated_radii=None):
     rgb_colors = [mcolors.hex2color(COLORS[cortex_id]) for cortex_id in cortex_ids_to_cortices]
 
     decade_sbj_num_lists = [[sbj_num for sbj_num in range(NUM_SBJS) if DECADES[nth_index] <= age_labels[sbj_num] < DECADES[nth_index + 1]] for nth_index in range(NUM_DECADES - 1)]
-    subnets_to_decades_to_hyperbolic_radii = [dict() for _ in range(NUM_SUBNETS)]
-    
     for subnet_num in range(NUM_SUBNETS):
         
         for nth_index, decade_sbj_num_list in enumerate(decade_sbj_num_lists):
@@ -1263,46 +1130,32 @@ def viz_subnetwork_radii_across_age(date, precalculated_radii=None):
         
             subnets_to_decades_to_hyperbolic_radii_L[subnet_num][nth_index] = subnet_radii_L
             subnets_to_decades_to_hyperbolic_radii_R[subnet_num][nth_index] = subnet_radii_R
+                
     
-            subnets_to_decades_to_hyperbolic_radii[subnet_num][nth_index] = \
-                (np.array(subnets_to_decades_to_hyperbolic_radii_L[subnet_num][nth_index]) + np.array(subnets_to_decades_to_hyperbolic_radii_R[subnet_num][nth_index])) / 2
-        
     for subnet_num in range(NUM_SUBNETS):
         rgb_color = rgb_colors[subnet_num]
         cortex = cortex_ids_to_cortices[subnet_num + 1]
-        # plt.figure()
-        # plt.title(f"Hyperbolic Radius Across Age : Left {cortex}")
-        # # plt.ylim(0, 4.5)
-        # plt.xlabel("Age Decade")
-        # plt.ylabel("Subnetwork Hyperbolic Radius")
-        # bp = plt.boxplot([subnets_to_decades_to_hyperbolic_radii_L[subnet_num][nth_index] for nth_index in range(NUM_DECADES - 1)], 
-        #             patch_artist=True, 
-        #             notch=True)
-        # plt.xticks(range(1, NUM_DECADES), 
-        #             ["18-30", "30-40", "40-50", "50-60", "60-70", "70-80", "80-90"],
-        #             rotation=45)
-
-        # for box in bp['boxes']:
-        #     box.set(facecolor=rgb_color)
-        
-        # plt.figure()
-        # plt.title(f"Hyperbolic Radius Across Age : Right {cortex}")
-        # # plt.ylim(0, 4.5)
-        # plt.xlabel("Age Decade")
-        # plt.ylabel("Subnetwork Hyperbolic Radius")
-        # bp = plt.boxplot([subnets_to_decades_to_hyperbolic_radii_R[subnet_num][nth_index] for nth_index in range(NUM_DECADES - 1)], 
-        #                 patch_artist=True, 
-        #                 notch=True)
-        # plt.xticks(range(1, NUM_DECADES), 
-        #             ["18-30", "30-40", "40-50", "50-60", "60-70", "70-80", "80-90"],
-        #             rotation=45)
-
         plt.figure()
-        plt.title(f"Hyperbolic Radius Across Age : {cortex}")
-        plt.ylim(0, 3.0)
+        plt.title(f"Hyperbolic Radius Across Age : Left {cortex}")
+        plt.ylim(0, 4.5)
         plt.xlabel("Age Decade")
-        plt.ylabel("Subnetwork Hyperbolic Radius")
-        bp = plt.boxplot([subnets_to_decades_to_hyperbolic_radii[subnet_num][nth_index] for nth_index in range(NUM_DECADES - 1)], 
+        plt.ylabel("ROI Hyperbolic Radius")
+        bp = plt.boxplot([subnets_to_decades_to_hyperbolic_radii_L[subnet_num][nth_index] for nth_index in range(NUM_DECADES - 1)], 
+                    patch_artist=True, 
+                    notch=True)
+        plt.xticks(range(1, NUM_DECADES), 
+                    ["18-30", "30-40", "40-50", "50-60", "60-70", "70-80", "80-90"],
+                    rotation=45)
+
+        for box in bp['boxes']:
+            box.set(facecolor=rgb_color)
+        
+        plt.figure()
+        plt.title(f"Hyperbolic Radius Across Age : Right {cortex}")
+        plt.ylim(0, 4.5)
+        plt.xlabel("Age Decade")
+        plt.ylabel("ROI Hyperbolic Radius")
+        bp = plt.boxplot([subnets_to_decades_to_hyperbolic_radii_R[subnet_num][nth_index] for nth_index in range(NUM_DECADES - 1)], 
                         patch_artist=True, 
                         notch=True)
         plt.xticks(range(1, NUM_DECADES), 
@@ -1358,9 +1211,9 @@ def viz_cortex_hyperbolic_radii_across_age(date):
         
         plt.figure()
         plt.title(f"Hyperbolic Radius Across Age : Left {cortex}")
-        
+        plt.ylim(0, 4.5)
         plt.xlabel("Age Decade")
-        plt.ylabel("Subnetwork Hyperbolic Radius")
+        plt.ylabel("ROI Hyperbolic Radius")
         bp = plt.boxplot([decades_to_hyperbolic_radii_L[nth_index] for nth_index in range(NUM_DECADES - 1)], 
                     patch_artist=True, 
                     notch=True)
@@ -1373,9 +1226,9 @@ def viz_cortex_hyperbolic_radii_across_age(date):
         
         plt.figure()
         plt.title(f"Hyperbolic Radius Across Age : Right {cortex}")
-        plt.ylim(0, 2.5)
+        plt.ylim(0, 4.5)
         plt.xlabel("Age Decade")
-        plt.ylabel("Subnetwork Hyperbolic Radius")
+        plt.ylabel("ROI Hyperbolic Radius")
         bp = plt.boxplot([decades_to_hyperbolic_radii_R[nth_index] for nth_index in range(NUM_DECADES - 1)], 
                         patch_artist=True, 
                         notch=True)
@@ -1486,121 +1339,47 @@ def get_cortex_hyperbolic_radii_across_age(date):
             plt.ylim(0, 4.5)
             plt.plot(sorted_embeddings_age_labels, sorted_means_R)
 
-def extract_subnetwork_radii_across_decades_for_clustering(date):
-    embeddings_df_list_with_age_labels = get_embeddings_df_list_with_age_labels(date)
-    _, cortex_ids_to_cortices = get_cortices_and_cortex_ids_to_cortices()
-    
-    cortices_to_hyperbolic_radii_across_age_L, cortices_to_hyperbolic_radii_across_age_R = \
-        get_cortex_regions_to_hyperbolic_radii_across_age_left_right(embeddings_df_list_with_age_labels, cortex_ids_to_cortices)
 
-    # TODO: FIX TO CORRECT AGE LABELS AND PLOT WITH AGE LABELS
-    age_labels = np.load(os.path.join("data", "cam_can_multiple", "age_labels_592_sbj_filtered.npy"))
-    
-    embeddings_age_labels = [embeddings_df.age_label[0] for embeddings_df in embeddings_df_list_with_age_labels]
-    DECADES = [0, 30, 40, 50, 60, 70, 80, 90]
-    
-    rgb_colors = [mcolors.hex2color(COLORS[cortex_id]) for cortex_id in cortex_ids_to_cortices]
-    radii_22_7_L = dict()
-    radii_22_7_R = dict()
-    for cortex_id in range(1, NUM_SUBNETS + 1):
-        decades_to_hyperbolic_radii_L = dict()
-        decades_to_hyperbolic_radii_R = dict()    
-        rgb_color = rgb_colors[cortex_id - 1]
+# for age_label in embeddings_age_labels:
+#     plt.scatter(age_label, sum(age_labels_to_hyperbolic_radii_L[age_label]) / len(age_labels_to_hyperbolic_radii_L[age_label]))
+#     plt.xlabel("Age")
+#     plt.ylabel("ROI Hyperbolic Radius")
 
-        for nth_index in range(NUM_DECADES - 1):
-            lower_bound = DECADES[nth_index]
-            upper_bound = DECADES[nth_index + 1]
-            decade_position_str = DECADE_POSITIONS_STR_LIST[nth_index]
-            
-            cortex = cortex_ids_to_cortices[cortex_id]
-            age_labels_to_hyperbolic_radii_L = dict()
-            age_labels_to_hyperbolic_radii_R = dict()
-            
-            for age_label, hyp_radii_L, hyp_radii_R in zip(
-                                                        embeddings_age_labels, 
-                                                        cortices_to_hyperbolic_radii_across_age_L[cortex], 
-                                                        cortices_to_hyperbolic_radii_across_age_R[cortex]
-                                                        ): 
-                if not lower_bound <= age_label < upper_bound: continue 
-                print("THESE ARE THE AGE LABELS", age_label)
-                decades_to_hyperbolic_radii_L[nth_index] = decades_to_hyperbolic_radii_L.get(nth_index, []) + [hyp_radii_L]
-                decades_to_hyperbolic_radii_R[nth_index] = decades_to_hyperbolic_radii_R.get(nth_index, []) + [hyp_radii_R]
-        radii_22_7_L[cortex_id] = decades_to_hyperbolic_radii_L
-        radii_22_7_R[cortex_id] = decades_to_hyperbolic_radii_R
-    return radii_22_7_L, radii_22_7_R
-
-def extract_hyperbolic_radii_across_decades_for_clustering(date, precomputed_radii=None):
-    # embeddings_df_list_with_age_labels = get_embeddings_df_list_with_age_labels(date)
-    # _, cortex_ids_to_cortices = get_cortices_and_cortex_ids_to_cortices()
-    
-    # cortices_to_hyperbolic_radii_across_age_L, cortices_to_hyperbolic_radii_across_age_R = \
-    #     get_cortex_regions_to_hyperbolic_radii_across_age_left_right(embeddings_df_list_with_age_labels, cortex_ids_to_cortices)
-
-    # TODO: FIX TO CORRECT AGE LABELS AND PLOT WITH AGE LABELS
-    age_labels = np.load(os.path.join("data", "cam_can_multiple", "age_labels_592_sbj_filtered.npy"))
-    
-    # embeddings_age_labels = [embeddings_df.age_label[0] for embeddings_df in embeddings_df_list_with_age_labels]
-    DECADES = [0, 30, 40, 50, 60, 70, 80, 90]
-    
-    radii_7_360 = dict()
-
-    if precomputed_radii:
-        radii_587_360 = precomputed_radii
-    else:
-        raise AssertionError(f"Must feed precomputed radii, not {precomputed_radii}")    
-    for nth_index in range(NUM_DECADES - 1):
-        lower_bound = DECADES[nth_index]
-        upper_bound = DECADES[nth_index + 1]
-        decade_radii = np.zeros(360)
-        count = 0
-        for sbj_index, age_label in enumerate(age_labels):
-            roi_radii = radii_587_360[sbj_index]
-            if not lower_bound <= age_label < upper_bound: continue
-            decade_radii += roi_radii
-            count += 1
-        decade_radii /= count
-        radii_7_360[nth_index] = decade_radii
-        
-    return radii_7_360
+# plt.figure()
+# plt.title(f"Box Plot of RIGHT Hemisphere Across Age for Cortex Subregion : {cortex}")
+# plt.ylim(0, 4.5)
+# for age_label in embeddings_age_labels:
+#     plt.scatter(age_label, sum(age_labels_to_hyperbolic_radii_R[age_label]) / len(age_labels_to_hyperbolic_radii_R[age_label]))
+#     plt.xlabel("Age")
+#     plt.ylabel("ROI Hyperbolic Radius")
 
 
-def extract_subnetwork_radii_across_decades_for_clustering_fast(date, precomputed_radii=None):
-    # TODO: FIX TO CORRECT AGE LABELS AND PLOT WITH AGE LABELS
-    hcp_atlas_df = get_hcp_atlas_df()
-    region_indices_to_cortex_ids = {i : hcp_atlas_df['Cortex_ID'][i] for i in range(NUM_ROIS)}
-    cortices, cortex_ids_to_cortices = get_cortices_and_cortex_ids_to_cortices()
-    cortex_ids = cortex_ids_to_cortices.keys()
-    # TODO: TEST IF CORTEX IDS CHANGED TO RANGE CHANGEWS ANYTHING
-    # cortex_ids = i for i in range(1, NUM_SUBNETS + 1)
-    age_labels = np.load(os.path.join("data", "cam_can_multiple", "age_labels_592_sbj_filtered.npy"))
+# Create Box Plots from Every Age Label in age_labels_to_hyperbolic_radii_L
+# plt.figure()
 
-    DECADES = [0, 30, 40, 50, 60, 70, 80, 90]
-    
-    radii_7_22 = {nth_index : [i for i in range(len(cortex_ids))] for nth_index in range(NUM_DECADES - 1)}
-    
-    if precomputed_radii:
-        radii_587_360 = precomputed_radii
-    else:
-        raise AssertionError(f"Must feed precomputed radii, not {precomputed_radii}")    
-    rgb_colors = [mcolors.hex2color(COLORS[cortex_id]) for cortex_id in cortex_ids_to_cortices]    
-    cortex_id_to_roi_indices_list = {cortex_id : [roi_index for roi_index in 
-                            range(NUM_ROIS) if region_indices_to_cortex_ids[roi_index] == cortex_id] 
-                            for cortex_id in cortex_ids}
-    # MAKE SURE CORTEX IDS ARE INTS
-    for nth_index in range(NUM_DECADES - 1):
-        lower_bound = DECADES[nth_index]
-        upper_bound = DECADES[nth_index + 1]
-        for cortex_id in range(1, NUM_SUBNETS + 1):
-            rgb_color = rgb_colors[cortex_id - 1]
-            roi_indices_list = cortex_id_to_roi_indices_list[cortex_id]
-            for sbj_index, age_label in enumerate(age_labels):
-                if not lower_bound <= age_label < upper_bound: continue
-                subnet_radii = np.mean([radii_587_360[sbj_index][roi_index] for roi_index in roi_indices_list])
-                radii_7_22[nth_index][cortex_id - 1] = subnet_radii
-    
-    return radii_7_22, rgb_colors
+# plt.title(f"Box Plot of LEFT Hemisphere Across Age for Cortex Subregion : {cortex}")
+# plt.xticks(range(1, len(embeddings_age_labels) + 1), 
+#             embeddings_age_labels,
+#             rotation=90)
+# for age_label in embeddings_age_labels:
+#     bp = plt.boxplot(age_labels_to_hyperbolic_radii_L[age_label], 
+#             patch_artist=True, 
+#             notch=True)
+# plt.xlabel("Age")
+# plt.ylabel("ROI Hyperbolic Radius")
 
-
+# plt.figure()
+# plt.ylim(0, 4.5)
+# plt.title(f"Box Plot of RIGHT Hemisphere Across Age for Cortex Subregion : {cortex}")
+# plt.xticks(range(1, len(embeddings_age_labels) + 1), 
+#             embeddings_age_labels,
+#             rotation=90)
+# for age_label in embeddings_age_labels:
+#     bp = plt.boxplot(age_labels_to_hyperbolic_radii_R[age_label]    , 
+#             patch_artist=True, 
+#             notch=True)
+# plt.xlabel("Age")
+# plt.ylabel("ROI Hyperbolic Radius")
 
 def viz_total_edges_box_plots_by_decade():
     age_labels_to_total_edges = get_age_labels_to_total_edges_by_threshold(FIVE_PERCENT_THRESHOLD)
