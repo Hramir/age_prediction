@@ -13,7 +13,7 @@ class LRScheduler(_LRScheduler):
         # Check if using mixed precision training
         self.mixed_training = False
         base_optimizer = optimizer
- 
+
         # Check that optimizer param is valid
         if not isinstance(optimizer, Optimizer):
             raise TypeError('{} is not an Optimizer'.format(
@@ -67,7 +67,7 @@ def get_dir_name(models_dir):
                     for d in os.listdir(models_dir)
                     if os.path.isdir(os.path.join(models_dir, d))
                     ]
-        ).astype(np.int)
+        ).astype(int)
         if len(existing_dirs) > 0:
             dir_id = str(existing_dirs.max() + 1)
         else:
@@ -99,7 +99,7 @@ def get_dir_name_for_age_prediction(models_dir):
                     for d in os.listdir(models_dir)
                     if os.path.isdir(os.path.join(models_dir, d))
                     ]
-        ).astype(np.int)
+        ).astype(int)
         if len(existing_dirs) > 0:
             dir_id = str(existing_dirs.max())
         else:

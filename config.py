@@ -9,7 +9,7 @@ config_args = {
         'lr': (0.01, 'learning rate'),
         'dropout': (0.0, 'dropout probability'),
         'cuda': (-1, 'which cuda device to use (-1 for cpu training)'),
-        'epochs': (150, 'maximum number of epochs to train for'),
+        'epochs': (10, 'maximum number of epochs to train for'),
         # 'epochs': (150, 'maximum number of epochs to train for'),
         # 'epochs': (300, 'maximum number of epochs to train for'),
         # 'epochs': (500, 'maximum number of epochs to train for'),

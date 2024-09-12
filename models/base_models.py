@@ -9,14 +9,20 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from hyperbolic_clustering.utils.utils import poincare_dist
-
-from layers.layers import FermiDiracDecoder
+from layers.layers import FermiDiracDecoder 
 import layers.hyp_layers as hyp_layers
 import manifolds
 import models.encoders as encoders
 from models.decoders import model2decoder
 from utils.eval_utils import acc_f1, MarginLoss
 
+from models.centroid_regression_model import get_centroid_regression_distance # NOTE: Added for HGNN centroid regression
+from utils.constants_utils import NUM_ROIS
+import os
+NUM_CENTROIDS = 7
+EMBEDDING_DIMENSION = 3
+use_centroid_loss = False
+age_labels = np.load(os.path.join("data", "cam_can_multiple", "age_labels_592_sbj_filtered.npy"))
 
 class BaseModel(nn.Module):
     """
@@ -44,7 +50,6 @@ class BaseModel(nn.Module):
             x = torch.cat([o[:, 0:1], x], dim=1)
             if self.manifold.name == 'Lorentz':
                 x = self.manifold.expmap0(x)
-        
         h = self.encoder.encode(x, adj)
         return h
 
@@ -111,7 +116,15 @@ class LPModel(BaseModel):
         self.nb_edges = args.nb_edges
         self.loss = MarginLoss(args.margin)
         # self.loss = MarginLoss(args.margin) + nn.MSELoss(reduction='sum')
-        
+        if use_centroid_loss:
+            self.graph_prediction_loss_function = nn.MSELoss()
+            self.centroid_embedding = torch.nn.Embedding(
+                NUM_CENTROIDS, EMBEDDING_DIMENSION,
+                sparse=False,
+                scale_grad_by_freq=False
+            )    
+            self.output_linear = nn.Linear(NUM_CENTROIDS, 1) # 1 since regression
+
         # Cole added
         self.is_inductive = True # Makes sense since Cole called the file train_inductive.py
         self.epoch_stats = {
@@ -136,10 +149,11 @@ class LPModel(BaseModel):
         emb_in = h[idx[:, 0], :]
         emb_out = h[idx[:, 1], :]
         sqdist = self.manifold.sqdist(emb_in, emb_out, self.c)
-        # TODO: RESTORE TO NON FD FHNN with -sqdist
+        # dist = self.manifold.dist(emb_in, emb_out)
+        # TODO: Restore to non-FD FHNN with -sqdist
         # Fermi Dirac Decoder Probabilities from HGCN
+        # TODO: See how -sqdist does now that thresholds have been increased.... still think that FD HGCN self.dc.forward(sqdist) is more correct
         return self.dc.forward(sqdist)
-        # return -sqdist
     
     def get_avg_hyperbolic_radius(self, embeddings):
         origin = torch.Tensor([1, 0, 0]) # .to(self.args.device)
@@ -187,7 +201,25 @@ class LPModel(BaseModel):
         pos_scores_full=[]
         neg_scores_full=[]
         # LOSS_FREQ = 1
-        cohesion_loss = 0
+        # cohesion_loss = 0
+        centroid_loss = torch.Tensor([0])
+        
+        # Tensorifying embeddings list
+        embeddings_age_labels = torch.Tensor([age_labels[graph_data_dict['index']] for graph_data_dict in graph_data_dicts])
+        embeddings_tensor = np.array(embeddings_list)
+        # embeddings_tensor = [torch.Tensor(embeddings) for embeddings in embeddings_list]
+        embeddings_tensor = torch.Tensor(embeddings_tensor)
+        if use_centroid_loss:
+            mask = torch.ones(self.centroid_embedding.num_embeddings, dtype=torch.float32)
+            for i in range(len(embeddings_list)):
+                age_label = torch.Tensor([embeddings_age_labels[i]])
+                centroid_dists = get_centroid_regression_distance(embeddings_tensor[i], 
+                                                    mask, 
+                                                    self.centroid_embedding, 
+                                                    self.manifold)
+                predicted_age = self.output_linear(centroid_dists)[0]
+                centroid_loss += self.graph_prediction_loss_function(predicted_age, age_label)
+        # TODO: Should normalize and rebalance centroid GP loss with LP loss so that it is even 
         for i in range(len(embeddings_list)):
             embeddings = embeddings_list[i]
             graph_data_dict = graph_data_dicts[i]
@@ -201,9 +233,7 @@ class LPModel(BaseModel):
                 pos_scores = pos_scores[:, 0]
                 neg_scores = neg_scores[:, 0]
             # adj_prob = graph_data['adj_prob']
-            
-            
-            # TODO: REVERT USETHICKSMYELINS TO TRUE
+
             if self.args.dataset == 'cam_can_multiple' and self.args.use_thicks_myelins:
                 plv_matrix = graph_data_dict['features'][:, 2:]
             else:
@@ -212,7 +242,11 @@ class LPModel(BaseModel):
             
             # Save time for margin loss calculations since PLV probabilities not needed for margin loss
             if not self.args.use_margin_loss:
-                adj_prob = self.get_adj_prob(plv_matrix_numpy, is_stretch_sigmoid=False)
+                # TODO: Consider simply min-max normalizing the matrix instead of running Cole's function (Cole uses a 95% min-max normalization)
+                # adj_prob = self.get_adj_prob(plv_matrix_numpy, is_stretch_sigmoid=False)
+                
+                from utils.data_utils import min_max_normalize
+                adj_prob = min_max_normalize(plv_matrix_numpy)
                 neg_probs = self.true_probs(adj_prob, edges_false)
                 pos_probs = self.true_probs(adj_prob, edges)
 
@@ -237,9 +271,7 @@ class LPModel(BaseModel):
             # exp_neg_scores_tensor = torch.exp(neg_scores_tensor)
             # pos_scores_full.append(exp_pos_scores_tensor)
             # neg_scores_full.append(exp_neg_scores_tensor)
-            
-            # TODO: TEST HOW THIS CHANGES EMBEDDINGS!!! MULTIPLY BY CONSTANT TERM REGULARIZATION
-            
+                        
             # avg_radius = self.get_avg_hyperbolic_radius(embeddings)
             
             # Penalize Clumping Up of Embeddings                
@@ -265,10 +297,127 @@ class LPModel(BaseModel):
                                     neg_scores_comb,
                                     num_graphs = len(embeddings_list)
                                     )
-        
-        metrics['loss'] += cohesion_loss
-        
+        if use_centroid_loss:
+            
+            metrics['loss'] = torch.Tensor([metrics['loss']])
+            metrics['loss'].view((1, 1))
+            metrics['loss'] += centroid_loss
+            # TODO: Test how only GP without LP loss changes embeddings, currently seems to not learn properly.
+            # It is possible that the autograd is getting messed up from recasting the torch tensor.
         return metrics
+    
+    def compute_metrics_multiple_for_embeddings_dict(self, index_to_embeddings_dict, graph_data_dicts, split):
+        # TODO: See if can add average radius regularization here as well (do not want data to clump up at origin)
+        edges_full= []
+        edges_false_full = []
+        pos_probs_full = []
+        neg_probs_full = []
+        pos_scores_full = []
+        neg_scores_full = []
+        # Tensorifying embeddings list
+        # embeddings_age_labels = torch.Tensor([age_labels[graph_data_dict['index']] for graph_data_dict in graph_data_dicts])
+        # embeddings_tensor = torch.Tensor([index_to_embeddings_dict[index] for index in index_to_embeddings_dict])
+        # embeddings_tensor = [torch.Tensor(embeddings) for embeddings in embeddings_list]
+        # embeddings_tensor = torch.Tensor(embeddings_tensor)
+        centroid_loss = torch.Tensor([0])
+        if use_centroid_loss:
+            mask = torch.ones(self.centroid_embedding.num_embeddings, dtype=torch.float32)
+            for index in index_to_embeddings_dict:
+                embeddings = index_to_embeddings_dict[index]
+                age_label = torch.Tensor([age_labels[index]])
+                centroid_dists = get_centroid_regression_distance(embeddings, 
+                                                    mask, 
+                                                    self.centroid_embedding, 
+                                                    self.manifold)
+                predicted_age = self.output_linear(centroid_dists).view((1, 1))
+                age_label = age_label.view((1, 1))
+                centroid_loss += self.graph_prediction_loss_function(predicted_age, age_label)
+        # TODO: Should normalize and rebalance centroid GP loss with LP loss so that it is even
+
+        for embeddings_index in index_to_embeddings_dict:
+            embeddings = index_to_embeddings_dict[embeddings_index]
+            # Find the corresponding graph_data_dict in the list of graph_data_dicts
+            for graph_data_dict in graph_data_dicts:
+                if graph_data_dict['index'] == embeddings_index:
+                    break
+            # graph_data_dict = graph_data_dicts[embeddings_index]
+
+            edges, edges_false = self.get_edges(embeddings, graph_data_dict, split)
+
+            pos_scores = self.decode(embeddings, edges)
+            neg_scores = self.decode(embeddings, edges_false)
+
+            if len(pos_scores.shape) > 1:
+                assert pos_scores.shape[1] == 1
+                pos_scores = pos_scores[:, 0]
+                neg_scores = neg_scores[:, 0]
+            # adj_prob = graph_data['adj_prob']
+            
+            if self.args.dataset == 'cam_can_multiple' and self.args.use_thicks_myelins:
+                plv_matrix = graph_data_dict['features'][:, 2:]
+            else:
+                plv_matrix = graph_data_dict['features']
+            plv_matrix_numpy = plv_matrix.clone().detach().cpu().numpy()
+            
+            # Save time for margin loss calculations since PLV probabilities not needed for margin loss
+            if not self.args.use_margin_loss:
+                
+                from utils.data_utils import min_max_normalize
+                adj_prob = min_max_normalize(plv_matrix_numpy)
+                neg_probs = self.true_probs(adj_prob, edges_false)
+                pos_probs = self.true_probs(adj_prob, edges)
+
+                pos_probs_tensor = torch.Tensor(pos_probs)
+                neg_probs_tensor = torch.Tensor(neg_probs)
+                
+            else:
+                pos_probs_tensor = torch.Tensor([0])
+                neg_probs_tensor = torch.Tensor([0])
+            
+            pos_scores_tensor = torch.Tensor(pos_scores)
+            neg_scores_tensor = torch.Tensor(neg_scores)
+            
+            edges_full.append(edges)
+            edges_false_full.append(edges_false)
+            pos_probs_full.append(pos_probs_tensor)
+            neg_probs_full.append(neg_probs_tensor)
+            pos_scores_full.append(pos_scores_tensor)
+            neg_scores_full.append(neg_scores_tensor)
+
+        edges_comb = torch.cat(edges_full)
+        edges_false_comb = torch.cat(edges_false_full)
+        pos_probs_comb = torch.cat(pos_probs_full)
+        neg_probs_comb = torch.cat(neg_probs_full)
+        pos_scores_comb = torch.cat(pos_scores_full)
+        neg_scores_comb = torch.cat(neg_scores_full)
+        
+        
+        ### edges,edges_false only used for their length, so don't matter
+        metrics = self.loss_handler(edges_comb,
+                                    edges_false_comb,
+                                    pos_probs_comb,
+                                    neg_probs_comb,
+                                    pos_scores_comb,
+                                    neg_scores_comb,
+                                    num_graphs = len(index_to_embeddings_dict)
+                                    )
+        if use_centroid_loss:
+            metrics['loss'] = torch.Tensor([metrics['loss']])
+            metrics['loss'].view((1, 1))
+            link_prediction_loss = metrics['loss']
+            graph_prediction_loss = centroid_loss
+            total_loss = link_prediction_loss + graph_prediction_loss 
+            graph_prediction_loss_fraction = graph_prediction_loss / total_loss
+            link_prediction_loss_fraction = link_prediction_loss / total_loss
+            print(f"Loss Fractions : LP : {link_prediction_loss_fraction}, GP : {graph_prediction_loss_fraction}")
+            ALPHA_FOR_LOSS = 0.8
+            weighted_loss = ALPHA_FOR_LOSS * link_prediction_loss + (1 - ALPHA_FOR_LOSS) * graph_prediction_loss
+            metrics['loss'] = weighted_loss
+            # TODO: Test how only GP without LP loss changes embeddings, currently seems to not learn properly.
+            # It is possible that the autograd is getting messed up from recasting the torch tensor.
+            # metrics['loss'] = centroid_loss
+        return metrics
+    
     def get_distance_between_embeddings(self, embeddings):
         dist = 0
         for i in range(len(embeddings)):
@@ -323,12 +472,17 @@ class LPModel(BaseModel):
         # Cole mentioned using use_weighted loss
         self.args.use_weighted_loss = True
         if not self.args.use_margin_loss:
+            
             if hasattr(self.args, 'use_weighted_loss') and self.args.use_weighted_loss:
+                # logging.info("Now using PLV-derived labels and MSE loss for Fermi-Dirac Decoder probabilities")
+                # Cole's way of computing loss function based on Fermi-Dirac Decoder
+                # pos_probs extracted from min-maxing PLV matrices
                 loss = F.mse_loss(pos_scores, pos_probs)
                 neg_loss= F.mse_loss(neg_scores, neg_probs)
             else:
+                # Chami's way of computing loss function based on Binary Cross Entropy Loss Function
                 loss = F.binary_cross_entropy(pos_scores, torch.ones_like(pos_scores)) 
-                neg_loss=F.binary_cross_entropy(neg_scores, torch.zeros_like(neg_scores))
+                neg_loss = F.binary_cross_entropy(neg_scores, torch.zeros_like(neg_scores))
             loss += neg_loss
             if pos_scores.is_cuda:
                 pos_scores = pos_scores.cpu()
@@ -336,14 +490,14 @@ class LPModel(BaseModel):
         else:
             
             # NOTE: Does not use min-maxed probabilities from PLV Matrix, only binarized scores it seems 
-            # MARGIN Loss requires predicted and true probs to be in same tensor.....
+            # Margin Loss requires predicted and true probs to be in same tensor.....
             # TODO: Make sure this is correct way of feeding into Margin Loss
             # loss = self.loss(torch.stack([pos_probs, pos_scores]))
             # neg_loss = self.loss(torch.stack([neg_probs, neg_scores]))
             
             preds = torch.stack([pos_scores, neg_scores], dim=-1)
             loss = self.loss(preds)
-            logging.info(f"Margin Loss: {loss}")
+            # logging.info(f"Margin Loss: {loss}")
             
         labels = [1] * pos_scores.shape[0] + [0] * neg_scores.shape[0]
         preds = np.array(list(pos_scores.data.cpu().numpy()) + list(neg_scores.data.cpu().numpy()))
@@ -496,7 +650,7 @@ class LPModel(BaseModel):
             'ap': precision,
             'acc': acc,
         }
-        # FIXED ACCURACY PRINT ISSUE, WAS NOT 0, IT IS THE STAT STRING FORMATTING THAT zeros it out since it is a float between 0 and 1
+        # Fixed accuracy print issue, was not 0, it is the stat string formatting that was zeroing it out since it is a float between 0 and 1
         stat_string = "%s Phase of Epoch %d: Precision %.6f, ROC %.6f, Loss %.6f, Accuracy %.6f, Edges %d, Graphs %d" % (
                 self.epoch_stats['prefix'],
                 self.epoch_stats['epoch'],
@@ -592,6 +746,29 @@ class LPModel(BaseModel):
             epoch_stats, stat_string = self.report_epoch_stats()
         return epoch_stats, embeddings, stat_string, embeddings_list
 
+    def evaluate_graph_data_dicts_and_get_index_to_embeddings_dict(self, epoch, graph_data_dicts, prefix, freeze=True):
+        self.eval()
+        setattr(self.args, 'currently_training', False)
+        embeddings_list = []
+        index_to_embeddings_dict = dict()
+        with torch.no_grad():
+            self.reset_epoch_stats(epoch, prefix)
+            for graph_data_dict in graph_data_dicts:
+
+                embeddings = self.encode(
+                    graph_data_dict['features'].to(self.args.device), 
+                    graph_data_dict['adj_train_norm'].to(self.args.device)
+                    )
+                
+                metrics = self.compute_metrics_for_evaluation(embeddings, graph_data_dict, prefix)
+                self.update_epoch_stats(metrics, prefix)
+                
+                embeddings_list.append(embeddings)
+                index_to_embeddings_dict[graph_data_dict['index']] = embeddings
+            epoch_stats, stat_string = self.report_epoch_stats()
+        return epoch_stats, embeddings, stat_string, index_to_embeddings_dict
+
+
     def binary_acc(self, predicted_labels, labels):
         num_correct = 0
         
@@ -615,3 +792,4 @@ class LPModel(BaseModel):
 
     def has_improved(self, m1, m2):
         return 0.5 * (m1['roc'] + m1['ap']) < 0.5 * (m2['roc'] + m2['ap'])
+
