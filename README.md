@@ -1,5 +1,5 @@
 # Age Prediction through hyperbolic radius extraction from hyperbolic embeddings of MEG brain networks using FHNN 
-Age Prediction using [Fully Hyperbolic Neural Networks](https://arxiv.org/abs/2105.14686) 
+Age Prediction research findings available in bioRxiv here: https://www.biorxiv.org/content/10.1101/2024.10.01.616153v1. Based on [Fully Hyperbolic Neural Networks](https://arxiv.org/abs/2105.14686) 
 
 ```
 @article{chen2021fully,
