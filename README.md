@@ -40,7 +40,11 @@ Source code based on [HGCN](https://github.com/HazyResearch/hgcn) and [FHNN](htt
  ┣ 📂utils
  ```
 
-## 1. Training FHNN model using Graph Iteration
+## Workflows:
+
+## 1. Hyperbolic Embedding Generation (Training FHNN model using Graph Iteration)
+To generate hyperbolic embeddings, open a jupyter notebook and run the following 
+
 Arguments passed to program:
 
 `--task` Specifies task. Can be [lp], lp denotes link prediction.
@@ -63,7 +67,7 @@ Arguments passed to program:
 
 For other arguments, see `config.py`
 
-In a Jupyter notebook, you can run an an example-run as follows: 
+In a Jupyter notebook, you can run an example-run as follows: 
 
 ! python train_graph_iteration.py \
     --task lp \
@@ -83,3 +87,9 @@ In a Jupyter notebook, you can run an an example-run as follows:
     --grad-clip 0.1 \
     --seed 1234 \
     --save 1
+
+This will produce hyperbolic embeddings, which will be saved in the /logs subdirectory. An initial age prediction regression will be performed using these embeddings, and the results will be outputted within the logs of the run. To perform additional subsequent regressions, see Workflow # 2.
+
+## 2. Age Prediction using Pre-generated Hyperbolic Embeddings
+
+Grab an existing hyperbolic embedding outputs directory in /logs. Then, run the python Jupyter notebook in age_prediction to perform an age prediction regression task.  
